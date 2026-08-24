@@ -1,0 +1,6 @@
+/bin/
+/output/
+/release-assets/
+/plan.json
+/release-notes.md
+*.part
