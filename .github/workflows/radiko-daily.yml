@@ -45,7 +45,7 @@ jobs:
       release_tag: ${{ steps.meta.outputs.release_tag }}
       matrix: ${{ steps.plan.outputs.matrix }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Configure Japanese proxy
         run: ./scripts/configure-proxy.sh
@@ -129,7 +129,7 @@ jobs:
       RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
       STATION_ID: ${{ matrix.station_id }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Configure Japanese proxy
         run: ./scripts/configure-proxy.sh
