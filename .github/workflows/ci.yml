@@ -11,12 +11,23 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
       - run: go test ./...
       - run: go vet ./...
+      - name: Verify yt-dlp-rajiko plugin
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check -r requirements.txt
+          yt-dlp --version
+          plugin_debug="$(yt-dlp -v 2>&1 || true)"
+          grep -q 'Extractor Plugins:.*RadikoTimeFreeIE' <<<"$plugin_debug"

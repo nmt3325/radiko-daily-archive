@@ -1,8 +1,8 @@
-name: Radiko daily archive
+name: Radiko nationwide daily archive
 
 on:
   schedule:
-    # 06:15 JST. The workflow archives the previous radiko broadcast day.
+    # 06:15 JST. Archive the previous radiko broadcast day (05:00–04:59).
     - cron: "15 21 * * *"
   workflow_dispatch:
     inputs:
@@ -10,13 +10,13 @@ on:
         description: "Broadcast date (YYYY-MM-DD, JST). Empty = yesterday"
         required: false
         type: string
-      area:
-        description: "Radiko area ID"
+      areas:
+        description: "all, or comma-separated IDs such as JP1,JP13,JP27"
         required: false
-        default: "JP13"
+        default: "all"
         type: string
       stations:
-        description: "Comma-separated station IDs. Empty = every station in the area"
+        description: "Comma-separated station IDs. Empty = every eligible station"
         required: false
         type: string
 
@@ -24,12 +24,12 @@ permissions:
   contents: write
 
 concurrency:
-  group: radiko-daily-${{ inputs.date || 'scheduled' }}
+  group: radiko-nationwide-${{ inputs.date || 'scheduled' }}
   cancel-in-progress: false
 
 env:
   TZ: Asia/Tokyo
-  RADIKO_AREA_ID: ${{ inputs.area || vars.RADIKO_AREA_ID || 'JP13' }}
+  RADIKO_AREAS: ${{ inputs.areas || vars.RADIKO_AREAS || 'all' }}
   RADIKO_STATION_IDS: ${{ inputs.stations || vars.RADIKO_STATION_IDS || '' }}
   RADIKO_MAIL: ${{ secrets.RADIKO_MAIL }}
   RADIKO_PASSWORD: ${{ secrets.RADIKO_PASSWORD }}
@@ -37,9 +37,9 @@ env:
 
 jobs:
   prepare:
-    name: Plan broadcast day
+    name: Plan nationwide broadcast day
     runs-on: ${{ vars.RADIKO_RUNNER || 'ubuntu-latest' }}
-    timeout-minutes: 20
+    timeout-minutes: 30
     outputs:
       target_date: ${{ steps.meta.outputs.target_date }}
       release_tag: ${{ steps.meta.outputs.release_tag }}
@@ -47,7 +47,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Configure Japanese proxy
+      - name: Configure optional proxy
         run: ./scripts/configure-proxy.sh
 
       - uses: actions/setup-go@v7
@@ -73,10 +73,10 @@ jobs:
           echo "target_date=$target_date" >> "$GITHUB_OUTPUT"
           echo "release_tag=radiko-$target_date" >> "$GITHUB_OUTPUT"
 
-      - name: Build
+      - name: Build planner
         run: go build -trimpath -o bin/radiko-archive ./cmd/radiko-archive
 
-      - name: Create station plan
+      - name: Create nationwide station plan
         id: plan
         env:
           TARGET_DATE: ${{ steps.meta.outputs.target_date }}
@@ -85,10 +85,10 @@ jobs:
           ./bin/radiko-archive \
             -mode plan \
             -date "$TARGET_DATE" \
-            -area "$RADIKO_AREA_ID" \
+            -areas "$RADIKO_AREAS" \
             -stations "$RADIKO_STATION_IDS" \
             -plan plan.json
-          matrix="$(jq -c '{include: [.stations[] | {station_id: .id}]}' plan.json)"
+          matrix="$(jq -c '{include: [.stations[] | {area_id: .area_id, station_id: .id}]}' plan.json)"
           [[ "$(jq '.include | length' <<<"$matrix")" -gt 0 ]]
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 
@@ -99,45 +99,53 @@ jobs:
           RELEASE_TAG: ${{ steps.meta.outputs.release_tag }}
         run: |
           set -euo pipefail
+          station_count="$(jq '.stations | length' plan.json)"
           cat > release-notes.md <<NOTES
-          Private radiko archive for **${TARGET_DATE}** (broadcast day, JST).
+          Private nationwide radiko archive for **${TARGET_DATE}** (broadcast day, JST).
 
-          - Area: ${RADIKO_AREA_ID}
-          - Scope: every configured station and every time-free-eligible program
+          - Requested areas: ${RADIKO_AREAS}
+          - Area-free/time-free stations: ${station_count}
+          - Downloader: yt-dlp + yt-dlp-rajiko
           - Workflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
 
-          Each station is uploaded as a separate .tar.zst asset. Check manifest.json inside each asset for per-program results and SHA-256 hashes.
+          Each station is a separate .tar.zst asset. Check manifest.json inside each asset for per-program results and SHA-256 hashes.
           NOTES
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release edit "$RELEASE_TAG" --title "Radiko ${TARGET_DATE}" --notes-file release-notes.md
+            gh release edit "$RELEASE_TAG" --title "Radiko nationwide ${TARGET_DATE}" --notes-file release-notes.md
           else
-            gh release create "$RELEASE_TAG" --target "$GITHUB_SHA" --title "Radiko ${TARGET_DATE}" --notes-file release-notes.md
+            gh release create "$RELEASE_TAG" --target "$GITHUB_SHA" --title "Radiko nationwide ${TARGET_DATE}" --notes-file release-notes.md
           fi
           gh release upload "$RELEASE_TAG" plan.json --clobber
 
   download:
-    name: Archive ${{ matrix.station_id }}
+    name: Archive ${{ matrix.area_id }} / ${{ matrix.station_id }}
     needs: prepare
     runs-on: ${{ vars.RADIKO_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 330
     strategy:
       fail-fast: false
-      max-parallel: 3
+      max-parallel: 5
       matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
     env:
       TARGET_DATE: ${{ needs.prepare.outputs.target_date }}
       RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+      AREA_ID: ${{ matrix.area_id }}
       STATION_ID: ${{ matrix.station_id }}
     steps:
       - uses: actions/checkout@v7
 
-      - name: Configure Japanese proxy
+      - name: Configure optional proxy
         run: ./scripts/configure-proxy.sh
 
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
 
       - name: Install runtime packages
         run: |
@@ -149,18 +157,21 @@ jobs:
             sudo apt-get update
             sudo apt-get install -y "${missing[@]}"
           fi
+          python -m pip install --disable-pip-version-check -r requirements.txt
+          plugin_debug="$(yt-dlp -v 2>&1 || true)"
+          grep -q 'Extractor Plugins:.*RadikoTimeFreeIE' <<<"$plugin_debug"
 
-      - name: Build
+      - name: Build archiver
         run: go build -trimpath -o bin/radiko-archive ./cmd/radiko-archive
 
-      - name: Download every program
+      - name: Download every program with yt-dlp-rajiko
         id: download
         run: |
           set +e
           ./bin/radiko-archive \
             -mode download \
             -date "$TARGET_DATE" \
-            -area "$RADIKO_AREA_ID" \
+            -area "$AREA_ID" \
             -station "$STATION_ID" \
             -out output
           code=$?
@@ -172,12 +183,12 @@ jobs:
         if: always()
         run: |
           set -euo pipefail
-          source_dir="output/${TARGET_DATE}/${RADIKO_AREA_ID}/${STATION_ID}"
+          source_dir="output/${TARGET_DATE}/${AREA_ID}/${STATION_ID}"
           mkdir -p "$source_dir" release-assets
           if [[ ! -f "$source_dir/manifest.json" ]]; then
             printf 'The download process failed before a manifest was written. See the workflow log.\n' > "$source_dir/ERROR.txt"
           fi
-          asset="release-assets/${TARGET_DATE}__${RADIKO_AREA_ID}__${STATION_ID}.tar.zst"
+          asset="release-assets/${TARGET_DATE}__${AREA_ID}__${STATION_ID}.tar.zst"
           tar -I 'zstd -1 -T0' -cf "$asset" -C "$source_dir" .
 
           # GitHub Release assets must each stay below 2 GiB.
@@ -223,12 +234,13 @@ jobs:
         run: |
           set -euo pipefail
           cat > release-notes.md <<NOTES
-          Private radiko archive for **${TARGET_DATE}** (broadcast day, JST).
+          Private nationwide radiko archive for **${TARGET_DATE}** (broadcast day, JST).
 
-          - Area: ${RADIKO_AREA_ID}
+          - Requested areas: ${RADIKO_AREAS}
           - Matrix result: **${DOWNLOAD_RESULT}**
+          - Downloader: yt-dlp + yt-dlp-rajiko
           - Workflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
 
-          Each station is a separate .tar.zst asset. Check manifest.json inside each asset for the exact per-program status and SHA-256 hashes. A failed matrix result means at least one program was unavailable or could not be downloaded; successful station assets are still retained.
+          Each station is a separate .tar.zst asset. Check manifest.json inside each asset for the exact per-program status and SHA-256 hashes. A failed matrix result means at least one restricted or unavailable program could not be downloaded; successful station assets are still retained.
           NOTES
-          gh release edit "$RELEASE_TAG" --title "Radiko ${TARGET_DATE}" --notes-file release-notes.md
+          gh release edit "$RELEASE_TAG" --title "Radiko nationwide ${TARGET_DATE}" --notes-file release-notes.md

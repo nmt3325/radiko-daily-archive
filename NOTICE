@@ -1,4 +1,9 @@
-This project uses github.com/yyoshiki41/go-radiko (GPL-3.0),
-Copyright Yoshiki Nakagawa and contributors.
+This project uses:
+
+- github.com/yyoshiki41/go-radiko (GPL-3.0),
+  Copyright Yoshiki Nakagawa and contributors.
+- github.com/garret1317/yt-dlp-rajiko (0BSD),
+  Copyright garret1317.
+- github.com/yt-dlp/yt-dlp (Unlicense).
 
 This repository is intended only for private, personal, non-commercial use.
