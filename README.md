@@ -2,7 +2,7 @@
 
 [`yyoshiki41/go-radiko`](https://github.com/yyoshiki41/go-radiko) で全国の番組表を作成し、[`garret1317/yt-dlp-rajiko`](https://github.com/garret1317/yt-dlp-rajiko) で各地域のタイムフリー番組を高速取得します。GitHub Actionsから、日本国内プロキシなしで全国のarea free対象局を扱えます。
 
-> **個人・非商用の視聴用途のみで使用してください。** radikoの利用規約、番組の権利、適用法令を守ってください。再配布やPublic Repositoryでの運用を想定していません。
+> **個人・非商用の視聴用途のみで使用してください。** Repositoryのソースコードは公開しますが、生成した音声は非公開のDraft Releaseだけに保存します。radikoの利用規約、番組の権利、適用法令を守り、音声を公開・再配布しないでください。
 
 ## 動作
 
@@ -12,7 +12,7 @@
   - 2026年8月時点で101局
   - `areafree=0` のNHK各局は対象外
 - `yt-dlp-rajiko` が局の地域を判定し、GitHub-hosted runnerから地域別トークンを取得
-- 全番組をM4Aで取得し、局ごとの `tar.zst` として日次Releaseへ保存
+- 全番組をM4Aで取得し、局ごとの `tar.zst` として非公開のDraft Releaseへ保存
 - `manifest.json` に番組名、ソースURL、取得成否、サイズ、SHA-256を記録
 - 単一assetが2 GiBに近づく場合は約1.9 GiBで自動分割
 - 日付・エリア・局を指定した手動バックフィルにも対応
@@ -49,9 +49,9 @@ radikoの放送日は **05:00〜翌04:59** です。ワークフローは翌朝�
    - `date`: `YYYY-MM-DD`（JST、空なら前日）
    - `areas`: `all` または `JP1,JP13,JP27`
    - `stations`: `TBS,802,NORTHWAVE`。空なら対象地域の全area-free局
-3. 実行後、**Releases** の該当日を確認
+3. 実行後、Repository管理権限のあるアカウントで**Releases → Drafts**の該当日を確認
 
-## Releaseの中身
+## 非公開Draft Releaseの中身
 
 ```text
 radiko-2026-08-24
@@ -72,15 +72,17 @@ manifest.json
 ...
 ```
 
-タイムフリー非対応、配信停止、権利上の制限、API障害などで取得できない番組は `manifest.json` に失敗理由を残します。成功済みの番組と局アーカイブはReleaseに保存されます。
+タイムフリー非対応、配信停止、権利上の制限、API障害などで取得できない番組は `manifest.json` に失敗理由を残します。成功済みの番組と局アーカイブはDraft Releaseに保存されます。
 
 ## 重要な注意
 
-- 全国全局では約101 runner jobs/日となり、音声データは数十GB/日になる可能性があります。Private RepositoryのActions分数、Release容量、ネットワーク利用量を必ず確認してください。
+- 全国全局では約101 runner jobs/日となり、音声データは数十GB/日になる可能性があります。GitHub ActionsとReleaseの容量・ネットワーク利用量を必ず確認してください。
 - `yt-dlp-rajiko` は非公式プラグインです。radiko側の仕様変更で停止する可能性があります。
 - NHKは `yt-dlp-rajiko` のradiko extractor対象外で、radiko局一覧でもarea free対象外です。
 - GitHubのscheduled workflowは混雑時に遅延することがあります。
-- Releaseを公開したり、RepositoryをPublicへ変更したりしないでください。
+- RepositoryのコードとActionsログはPublicです。認証情報や音声データをコード・ログへ出力しないでください。
+- GitHubにはPublic Repository用の独立した「Private Release」はないため、**Draft Release**を非公開保存先として使用します。DraftをPublishしないでください。
+- WorkflowはReleaseの作成時・更新時に毎回`--draft`を指定し、誤って公開済みになったReleaseも次回処理時にDraftへ戻します。
 
 ## バージョン
 

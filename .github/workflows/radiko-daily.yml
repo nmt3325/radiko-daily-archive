@@ -92,7 +92,7 @@ jobs:
           [[ "$(jq '.include | length' <<<"$matrix")" -gt 0 ]]
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 
-      - name: Create daily release
+      - name: Create private draft release
         env:
           GH_TOKEN: ${{ github.token }}
           TARGET_DATE: ${{ steps.meta.outputs.target_date }}
@@ -101,7 +101,7 @@ jobs:
           set -euo pipefail
           station_count="$(jq '.stations | length' plan.json)"
           cat > release-notes.md <<NOTES
-          Private nationwide radiko archive for **${TARGET_DATE}** (broadcast day, JST).
+          Private draft nationwide radiko archive for **${TARGET_DATE}** (broadcast day, JST).
 
           - Requested areas: ${RADIKO_AREAS}
           - Area-free/time-free stations: ${station_count}
@@ -111,9 +111,9 @@ jobs:
           Each station is a separate .tar.zst asset. Check manifest.json inside each asset for per-program results and SHA-256 hashes.
           NOTES
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release edit "$RELEASE_TAG" --title "Radiko nationwide ${TARGET_DATE}" --notes-file release-notes.md
+            gh release edit "$RELEASE_TAG" --draft --title "Radiko nationwide ${TARGET_DATE}" --notes-file release-notes.md
           else
-            gh release create "$RELEASE_TAG" --target "$GITHUB_SHA" --title "Radiko nationwide ${TARGET_DATE}" --notes-file release-notes.md
+            gh release create "$RELEASE_TAG" --draft --target "$GITHUB_SHA" --title "Radiko nationwide ${TARGET_DATE}" --notes-file release-notes.md
           fi
           gh release upload "$RELEASE_TAG" plan.json --clobber
 
@@ -219,13 +219,13 @@ jobs:
           fi
 
   finalize:
-    name: Finalize release
+    name: Finalize draft release
     if: always() && needs.prepare.result == 'success'
     needs: [prepare, download]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Update release notes
+      - name: Update draft release notes
         env:
           GH_TOKEN: ${{ github.token }}
           TARGET_DATE: ${{ needs.prepare.outputs.target_date }}
@@ -234,7 +234,7 @@ jobs:
         run: |
           set -euo pipefail
           cat > release-notes.md <<NOTES
-          Private nationwide radiko archive for **${TARGET_DATE}** (broadcast day, JST).
+          Private draft nationwide radiko archive for **${TARGET_DATE}** (broadcast day, JST).
 
           - Requested areas: ${RADIKO_AREAS}
           - Matrix result: **${DOWNLOAD_RESULT}**
@@ -243,4 +243,4 @@ jobs:
 
           Each station is a separate .tar.zst asset. Check manifest.json inside each asset for the exact per-program status and SHA-256 hashes. A failed matrix result means at least one restricted or unavailable program could not be downloaded; successful station assets are still retained.
           NOTES
-          gh release edit "$RELEASE_TAG" --title "Radiko nationwide ${TARGET_DATE}" --notes-file release-notes.md
+          gh release edit "$RELEASE_TAG" --draft --title "Radiko nationwide ${TARGET_DATE}" --notes-file release-notes.md
