@@ -214,7 +214,7 @@ jobs:
           DOWNLOAD_EXIT_CODE: ${{ steps.download.outputs.exit_code }}
         run: |
           if [[ -z "$DOWNLOAD_EXIT_CODE" || "$DOWNLOAD_EXIT_CODE" != "0" ]]; then
-            echo "One or more programs failed. The uploaded manifest contains details." >&2
+            echo "One or more programs failed for a reason other than radiko timefree unavailability. The uploaded manifest contains details." >&2
             exit 1
           fi
 
@@ -241,6 +241,6 @@ jobs:
           - Downloader: yt-dlp + yt-dlp-rajiko
           - Workflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
 
-          Each station is a separate .tar.zst asset. Check manifest.json inside each asset for the exact per-program status and SHA-256 hashes. A failed matrix result means at least one restricted or unavailable program could not be downloaded; successful station assets are still retained.
+          Each station is a separate .tar.zst asset. Check manifest.json inside each asset for the exact per-program status and SHA-256 hashes. Programs radiko does not offer on timefree are recorded as "unavailable" and no longer fail the run. A failed matrix result means at least one program failed for another reason. Successful station assets are always retained.
           NOTES
           gh release edit "$RELEASE_TAG" --draft --title "Radiko nationwide ${TARGET_DATE}" --notes-file release-notes.md

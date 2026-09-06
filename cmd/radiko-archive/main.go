@@ -34,6 +34,29 @@ const (
 	defaultProgramTimout = 90 * time.Minute
 )
 
+// Program statuses recorded in manifest.json.
+const (
+	statusDownloaded  = "downloaded"
+	statusFailed      = "failed"
+	statusUnavailable = "unavailable"
+)
+
+// errProgramUnavailable marks a program radiko itself refuses to serve over
+// timefree: rights restrictions, distribution stops, live-only programs and
+// so on. Retrying cannot help and it is not a defect of this archiver, so the
+// program is recorded in the manifest and skipped instead of failing the whole
+// station.
+var errProgramUnavailable = errors.New("radiko does not offer this program on timefree")
+
+// unavailableMarkers are yt-dlp-rajiko messages that mean radiko will never
+// serve the program, no matter how often it is retried.
+var unavailableMarkers = []string{
+	"this programme is not available",
+	"this program is not available",
+	"programme is not available",
+	"program is not available",
+}
+
 type options struct {
 	mode           string
 	date           string
@@ -70,6 +93,7 @@ type manifest struct {
 	GeneratedAt time.Time       `json:"generated_at"`
 	Succeeded   int             `json:"succeeded"`
 	Failed      int             `json:"failed"`
+	Unavailable int             `json:"unavailable"`
 	Programs    []programResult `json:"programs"`
 }
 
@@ -317,7 +341,7 @@ func downloadStation(ctx context.Context, o options, broadcastDate time.Time) er
 		sourceURL := fmt.Sprintf("rdk://%s-%s", selected.ID, program.Ft)
 		result := programResult{
 			Start: program.Ft, End: program.To, Title: strings.TrimSpace(program.Title),
-			Performer: strings.TrimSpace(program.Pfm), SourceURL: sourceURL, Status: "failed",
+			Performer: strings.TrimSpace(program.Pfm), SourceURL: sourceURL, Status: statusFailed,
 		}
 		if result.Title == "" {
 			result.Title = "Untitled"
@@ -336,11 +360,17 @@ func downloadStation(ctx context.Context, o options, broadcastDate time.Time) er
 		fmt.Printf("[%d/%d] %s %s — %s\n", index+1, len(programs), selected.ID, program.Ft, result.Title)
 
 		downloadErr := downloadProgram(ctx, selected.ID, start, outputPath, o.programTimeout, auth.args)
-		if downloadErr != nil {
+		switch {
+		case errors.Is(downloadErr, errProgramUnavailable):
+			result.Status = statusUnavailable
+			result.Error = sanitizeError(downloadErr.Error())
+			m.Unavailable++
+			fmt.Println("  skipped: radiko does not offer this program on timefree")
+		case downloadErr != nil:
 			result.Error = sanitizeError(downloadErr.Error())
 			m.Failed++
 			fmt.Fprintf(os.Stderr, "  failed: %s\n", result.Error)
-		} else {
+		default:
 			info, statErr := os.Stat(outputPath)
 			if statErr != nil {
 				result.Error = sanitizeError(statErr.Error())
@@ -351,7 +381,7 @@ func downloadStation(ctx context.Context, o options, broadcastDate time.Time) er
 					result.Error = sanitizeError(hashErr.Error())
 					m.Failed++
 				} else {
-					result.Status = "downloaded"
+					result.Status = statusDownloaded
 					result.File = fileName
 					result.Bytes = info.Size()
 					result.SHA256 = digest
@@ -369,12 +399,15 @@ func downloadStation(ctx context.Context, o options, broadcastDate time.Time) er
 	if err := appendGitHubSummary(m); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: write step summary: %v\n", err)
 	}
-	fmt.Printf("Station complete: %s/%s; downloaded=%d failed=%d\n", o.area, selected.ID, m.Succeeded, m.Failed)
+	fmt.Printf("Station complete: %s/%s; downloaded=%d failed=%d unavailable=%d\n", o.area, selected.ID, m.Succeeded, m.Failed, m.Unavailable)
 	if m.Succeeded == 0 {
-		return fmt.Errorf("all %d programs failed for %s", m.Failed, selected.ID)
+		return fmt.Errorf("no program could be downloaded for %s (%d failed, %d unavailable on timefree)", selected.ID, m.Failed, m.Unavailable)
 	}
 	if m.Failed > 0 {
 		return fmt.Errorf("%d of %d programs failed for %s; see manifest.json", m.Failed, len(m.Programs), selected.ID)
+	}
+	if m.Unavailable > 0 {
+		fmt.Printf("%d of %d programs are not offered on radiko timefree and were skipped; see manifest.json\n", m.Unavailable, len(m.Programs))
 	}
 	return nil
 }
@@ -427,12 +460,33 @@ func downloadProgram(parent context.Context, stationID string, start time.Time, 
 		if parent.Err() != nil {
 			return parent.Err()
 		}
+		if isUnavailableOutput(output.String()) {
+			removeDownloadFiles(outputPath)
+			return unavailableError(output.String())
+		}
 		if attempt < 3 {
 			time.Sleep(time.Duration(attempt*5) * time.Second)
 		}
 	}
 	removeDownloadFiles(outputPath)
 	return lastErr
+}
+
+// isUnavailableOutput reports whether yt-dlp refused because radiko does not
+// offer the program on timefree. That refusal is permanent, so the caller must
+// not waste two more attempts and 15 seconds of sleep on it.
+func isUnavailableOutput(output string) bool {
+	lowered := strings.ToLower(output)
+	for _, marker := range unavailableMarkers {
+		if strings.Contains(lowered, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func unavailableError(output string) error {
+	return fmt.Errorf("%w: %s", errProgramUnavailable, sanitizeError(tail(output, 500)))
 }
 
 func loadRegionStations(ctx context.Context) ([]regionStation, error) {
@@ -666,19 +720,19 @@ func appendGitHubSummary(m manifest) error {
 	}
 	defer file.Close()
 	_, err = fmt.Fprintf(file,
-		"## %s — %s / %s (%s)\n\n- Downloaded: **%d**\n- Failed: **%d**\n- Downloader: **%s**\n\n",
-		escapeMarkdown(m.StationName), m.Date, m.AreaID, m.StationID, m.Succeeded, m.Failed, downloaderName,
+		"## %s — %s / %s (%s)\n\n- Downloaded: **%d**\n- Failed: **%d**\n- Unavailable on timefree: **%d**\n- Downloader: **%s**\n\n",
+		escapeMarkdown(m.StationName), m.Date, m.AreaID, m.StationID, m.Succeeded, m.Failed, m.Unavailable, downloaderName,
 	)
 	if err != nil {
 		return err
 	}
-	if m.Failed > 0 {
-		if _, err := fmt.Fprintln(file, "| Start | Program | Error |\n|---|---|---|"); err != nil {
+	if m.Failed > 0 || m.Unavailable > 0 {
+		if _, err := fmt.Fprintln(file, "| Start | Program | Status | Detail |\n|---|---|---|---|"); err != nil {
 			return err
 		}
 		for _, program := range m.Programs {
-			if program.Status == "failed" {
-				if _, err := fmt.Fprintf(file, "| %s | %s | %s |\n", program.Start, escapeMarkdown(program.Title), escapeMarkdown(program.Error)); err != nil {
+			if program.Status != statusDownloaded {
+				if _, err := fmt.Fprintf(file, "| %s | %s | %s | %s |\n", program.Start, escapeMarkdown(program.Title), program.Status, escapeMarkdown(program.Error)); err != nil {
 					return err
 				}
 			}
