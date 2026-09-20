@@ -243,4 +243,4 @@ jobs:
 
           Each station is a separate .tar.zst asset. Check manifest.json inside each asset for the exact per-program status and SHA-256 hashes. Programs radiko does not offer on timefree are recorded as "unavailable" and no longer fail the run. A failed matrix result means at least one program failed for another reason. Successful station assets are always retained.
           NOTES
-          gh release edit "$RELEASE_TAG" --draft --title "Radiko nationwide ${TARGET_DATE}" --notes-file release-notes.md
+          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft --title "Radiko nationwide ${TARGET_DATE}" --notes-file release-notes.md
